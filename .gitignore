@@ -1,2 +1,8 @@
 /target
 .claude/
+.codex/
+.agents/
+codex-*.log
+AGENTS.md
+PROJECT_STATE.md
+docs/

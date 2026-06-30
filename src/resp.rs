@@ -9,16 +9,17 @@ pub enum RespValue {
     Array(Vec<RespValue>),
 }
 
-pub fn parse(input: &str) -> Result<RespValue,String> {
+pub fn parse(input: &str) -> Result<(RespValue, usize), String> {
     let lines: Vec<&str> = input.lines().collect();
     let mut pos = 0;
-    parse_value(&lines, &mut pos)
+    let value = parse_value(&lines, &mut pos)?;
+    Ok((value, pos))
 }
 
-fn parse_value(lines: &[&str], pos: &mut usize) -> Result<RespValue,String> {
-    let line =  match  lines.get(*pos) {
-      Some(line) => *line,
-      None => return Err("unexpected end of input".to_string()),
+fn parse_value(lines: &[&str], pos: &mut usize) -> Result<RespValue, String> {
+    let line = match lines.get(*pos) {
+        Some(line) => *line,
+        None => return Err("unexpected end of input".to_string()),
     };
 
     *pos += 1;
@@ -27,36 +28,36 @@ fn parse_value(lines: &[&str], pos: &mut usize) -> Result<RespValue,String> {
         Some('+') => Ok(RespValue::SimpleString(line[1..].to_string())),
         Some('-') => Ok(RespValue::Error(line[1..].to_string())),
         Some(':') => {
-            let n  = match line[1..].parse::<i64>(){
-                Ok(n) => n, 
+            let n = match line[1..].parse::<i64>() {
+                Ok(n) => n,
                 Err(_) => return Err("invalid integer".to_string()),
             };
 
             Ok(RespValue::Integer(n))
-        },
+        }
         Some('$') => {
-            let length: i64 =  match line[1..].parse::<i64>() {
-                Ok(n) => n, 
+            let length: i64 = match line[1..].parse::<i64>() {
+                Ok(n) => n,
                 Err(_) => return Err("invalid integer".to_string()),
-            }; 
+            };
 
             if length == -1 {
                 Ok(RespValue::Null)
             } else {
-              let data = match lines.get(*pos) {
-               Some(data) => *data,
-               None => return Err("unexpected end of input".to_string()),
-               };
+                let data = match lines.get(*pos) {
+                    Some(data) => *data,
+                    None => return Err("unexpected end of input".to_string()),
+                };
                 *pos += 1;
                 Ok(RespValue::BulkString(data.to_string()))
             }
         }
         Some('*') => {
-            let count: usize =  match line[1..].parse::<usize>(){
+            let count: usize = match line[1..].parse::<usize>() {
                 Ok(n) => n,
                 Err(_) => return Err("invalid integer".to_string()),
             };
-            
+
             let mut items = Vec::new();
             for _ in 0..count {
                 items.push(parse_value(lines, pos)?);
@@ -128,32 +129,35 @@ mod tests {
 
     #[test]
     fn test_parse_simple_string() {
-        assert_eq!(parse("+OK\r\n"), Ok(RespValue::SimpleString("OK".to_string())));
+        assert_eq!(
+            parse("+OK\r\n"),
+            Ok((RespValue::SimpleString("OK".to_string()), 1))
+        );
     }
 
     #[test]
     fn test_parse_error() {
         assert_eq!(
             parse("-ERR unknown command\r\n"),
-            Ok(RespValue::Error("ERR unknown command".to_string()))
+            Ok((RespValue::Error("ERR unknown command".to_string()), 1))
         );
     }
 
     #[test]
     fn test_parse_integer() {
-        assert_eq!(parse(":42\r\n"), Ok(RespValue::Integer(42)));
+        assert_eq!(parse(":42\r\n"), Ok((RespValue::Integer(42), 1)));
     }
 
     #[test]
     fn test_parse_null() {
-        assert_eq!(parse("$-1\r\n"), Ok(RespValue::Null));
+        assert_eq!(parse("$-1\r\n"), Ok((RespValue::Null, 1)));
     }
 
     #[test]
     fn test_parse_bulk_string() {
         assert_eq!(
             parse("$5\r\nhello\r\n"),
-            Ok(RespValue::BulkString("hello".to_string()))
+            Ok((RespValue::BulkString("hello".to_string()), 2))
         );
     }
 
@@ -161,11 +165,14 @@ mod tests {
     fn test_parse_array() {
         assert_eq!(
             parse("*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"),
-            Ok(RespValue::Array(vec![
-                RespValue::BulkString("SET".to_string()),
-                RespValue::BulkString("foo".to_string()),
-                RespValue::BulkString("bar".to_string()),
-            ]))
+            Ok((
+                RespValue::Array(vec![
+                    RespValue::BulkString("SET".to_string()),
+                    RespValue::BulkString("foo".to_string()),
+                    RespValue::BulkString("bar".to_string()),
+                ]),
+                7,
+            ))
         );
     }
 
@@ -219,7 +226,7 @@ mod tests {
     #[test]
     fn test_roundtrip() {
         let input = "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
-        let value = parse(input).unwrap();
+        let (value, _lines_consumed) = parse(input).unwrap();
         assert_eq!(serialize(&value), input);
     }
 }

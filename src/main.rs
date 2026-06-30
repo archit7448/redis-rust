@@ -29,8 +29,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 connection_buffer.extend_from_slice(&buf[..n]);
                                 let tcp_stream_data = String::from_utf8_lossy(&connection_buffer);
                                 let response = match resp::parse(&tcp_stream_data) {
-                                    Ok(command) => {
-                                        connection_buffer.clear();
+                                    Ok((command, _lines_consumed)) => {
+                                        let bytes_consumed = lines_to_bytes(&tcp_stream_data, _lines_consumed);
+                                        connection_buffer.drain(..bytes_consumed);
                                         Some(handle_command(command, &store_for_this_thread))
                                     }
                                     Err(message) if message == "unexpected end of input" => None,
@@ -78,11 +79,15 @@ fn handle_command(
             match cmd.as_str() {
                 "GET" => {
                     if items.len() != 2 {
-                       return RespValue::Error("ERR wrong number of arguments for GET".to_string());
+                        return RespValue::Error(
+                            "ERR wrong number of arguments for GET".to_string(),
+                        );
                     }
                     let key = match as_bulk_string(&items[1]) {
-                         Some(key) => key,
-                         None => return RespValue::Error("ERR key must be a bulk string".to_string()),
+                        Some(key) => key,
+                        None => {
+                            return RespValue::Error("ERR key must be a bulk string".to_string());
+                        }
                     };
 
                     let map = store.lock().unwrap();
@@ -92,39 +97,51 @@ fn handle_command(
                     }
                 }
                 "SET" => {
-                     if items.len() != 3 {
-                        return RespValue::Error("ERR wrong number of arguments for SET".to_string());
-                     }
+                    if items.len() != 3 {
+                        return RespValue::Error(
+                            "ERR wrong number of arguments for SET".to_string(),
+                        );
+                    }
 
                     let key = match as_bulk_string(&items[1]) {
-                     Some(key) => key,
-                     None => return RespValue::Error("ERR key must be a bulk string".to_string()),
+                        Some(key) => key,
+                        None => {
+                            return RespValue::Error("ERR key must be a bulk string".to_string());
+                        }
                     };
 
                     let value = match as_bulk_string(&items[2]) {
-                     Some(value) => value,
-                     None => return RespValue::Error("ERR value must be a bulk string".to_string()),
+                        Some(value) => value,
+                        None => {
+                            return RespValue::Error("ERR value must be a bulk string".to_string());
+                        }
                     };
 
-                   let mut map: std::sync::MutexGuard<'_, HashMap<String, String>> = store.lock().unwrap();
-                   map.insert(key.to_string(), value.to_string());
-                   RespValue::SimpleString("OK".to_string())
+                    let mut map: std::sync::MutexGuard<'_, HashMap<String, String>> =
+                        store.lock().unwrap();
+                    map.insert(key.to_string(), value.to_string());
+                    RespValue::SimpleString("OK".to_string())
                 }
                 "DEL" => {
-                     if items.len() != 2 {
-                        return RespValue::Error("ERR wrong number of arguments for Del".to_string());
-                     }
+                    if items.len() != 2 {
+                        return RespValue::Error(
+                            "ERR wrong number of arguments for Del".to_string(),
+                        );
+                    }
 
                     let key = match as_bulk_string(&items[1]) {
-                     Some(key) => key,
-                     None => return RespValue::Error("ERR key must be a bulk string".to_string()),
+                        Some(key) => key,
+                        None => {
+                            return RespValue::Error("ERR key must be a bulk string".to_string());
+                        }
                     };
-                    
-                   let mut map: std::sync::MutexGuard<'_, HashMap<String, String>> = store.lock().unwrap();
-                   match  map.remove(key) {
-                       Some(_) => RespValue::Integer(1),
-                       None => RespValue::Integer(0)
-                   }
+
+                    let mut map: std::sync::MutexGuard<'_, HashMap<String, String>> =
+                        store.lock().unwrap();
+                    match map.remove(key) {
+                        Some(_) => RespValue::Integer(1),
+                        None => RespValue::Integer(0),
+                    }
                 }
                 _ => RespValue::Error("unknown command".to_string()),
             }
@@ -133,11 +150,23 @@ fn handle_command(
     }
 }
 
-
-
-fn as_bulk_string(value: &RespValue) -> Option<&str>{
-     match value {
-         RespValue::BulkString(s) => Some(s.as_str()),
-         _ => None,
-     }
+fn as_bulk_string(value: &RespValue) -> Option<&str> {
+    match value {
+        RespValue::BulkString(s) => Some(s.as_str()),
+        _ => None,
+    }
 }
+
+
+fn lines_to_bytes(input : &str , line_count:usize) -> usize {
+   let mut seen = 0; 
+   for (byte_idx , ch) in input.char_indices() {
+        if ch == '\n' {
+            seen += 1; 
+            if seen == line_count{
+                return byte_idx + 1;
+            }
+        }
+   }
+   input.len()
+} 
