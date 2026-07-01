@@ -97,17 +97,22 @@ fn handle_command(
                         }
                     };
 
-                    let map = store.lock().unwrap();
-                    match map.get(key) {
-                        Some(data) => {
-                            match data.expires_at {
-                                Some(time) if time <= Instant::now() => RespValue::Null,
-                                Some(_) => RespValue::Null,
-                                None => RespValue::SimpleString("Expire is not set".to_string()),
-                            };
+                    let mut map = store.lock().unwrap();
+                    let delete_key = match map.get(key) {
+                        Some(data) => match data.expires_at {
+                            Some(time) if is_expired(time) => true,
+                            _ => false,
+                        },
+                        _ => false,
+                    };
 
-                            RespValue::BulkString(data.value.clone())
-                        }
+                    if delete_key {
+                        map.remove(key);
+                        return RespValue::Null;
+                    }
+
+                    match map.get(key) {
+                        Some(data) => RespValue::BulkString(data.value.clone()),
                         None => RespValue::Null,
                     }
                 }
@@ -164,6 +169,70 @@ fn handle_command(
                         None => RespValue::Integer(0),
                     }
                 }
+                "EXPIRE" => {
+                    if items.len() != 3 {
+                        return RespValue::Error(
+                            "ERR wrong number of arguments for EXPIRE".to_string(),
+                        );
+                    }
+                    let key = match as_bulk_string(&items[1]) {
+                        Some(key) => key,
+                        None => {
+                            return RespValue::Integer(0);
+                        }
+                    };
+                    let ttl = match &items[2] {
+                        RespValue::Integer(data) => {
+                            if *data < 0 {
+                                return RespValue::Error("ERR TTL must be positive".to_string());
+                            }
+                            *data as u64
+                        }
+                        _ => {
+                            return RespValue::Error("ERR key must be a bulk string".to_string());
+                        }
+                    };
+
+                    let mut map: std::sync::MutexGuard<'_, HashMap<String, Entry>> =
+                        store.lock().unwrap();
+                    match map.get_mut(key) {
+                        Some(entry) => {
+                            entry.expires_at = Some(Instant::now() + Duration::from_secs(ttl));
+                            RespValue::Integer(0)
+                        }
+                        None => RespValue::Error("Key doesn't exist".to_string()),
+                    }
+                }
+                "TTL" => {
+                    if items.len() != 2 {
+                        return RespValue::Error(
+                            "Error wrong number of arguments to expire".to_string(),
+                        );
+                    }
+
+                    let key = match as_bulk_string(&items[1]) {
+                        Some(key) => key,
+                        None => return RespValue::Integer(-2),
+                    };
+
+                    let map: std::sync::MutexGuard<'_, HashMap<String, Entry>> =
+                        store.lock().unwrap();
+                    match map.get(key) {
+                        Some(entry) => match entry.expires_at {
+                            Some(time) => {
+                                if is_expired(time) {
+                                    RespValue::Integer(-2)
+                                } else {
+                                    let time_remaining =
+                                        time.duration_since(Instant::now()).as_secs() as i64;
+                                    RespValue::Integer(time_remaining)
+                                }
+                            }
+                            None => RespValue::Integer(-1),
+                        },
+                        None => RespValue::Integer(-2),
+                    }
+                }
                 _ => RespValue::Error("unknown command".to_string()),
             }
         }
@@ -175,6 +244,14 @@ fn as_bulk_string(value: &RespValue) -> Option<&str> {
     match value {
         RespValue::BulkString(s) => Some(s.as_str()),
         _ => None,
+    }
+}
+
+fn is_expired(expired_ttl: Instant) -> bool {
+    if expired_ttl < Instant::now() {
+        true
+    } else {
+        false
     }
 }
 
